@@ -1,18 +1,21 @@
-# Name: Gamesetup
-# Author: G.G.Otto
+# Name: Game Setup
+# Author: Oliver White
 # Date: 1/25/2021
-# Version 1.7.4
+# Version 1.8.5
 #
 # Used with the pygame module
 #
 # This module is to make setting up your game easier.
-# It also in a variety of different functions, objects,
+# It has a variety of different functions, objects,
 # and methods to make coding your game easier in general.
 #
-# WARNING: codes uses older versions may not be
+# WARNING: codes using older versions may not be
 # completely combatible with new versions
 
 import pygame, time, math, random
+
+global GAME_VERSION
+GAME_VERSION = "1.8.5"
 
 class GameSetupError(Exception):
     '''error for the gamesetup module'''
@@ -94,8 +97,13 @@ class Camera(pygame.Surface):
 
     def point(self, point):
         '''Camera.point((x,y)) -> (x,y)
-        returns the point (relative to screen) on camera'''
+        converts camera coords to normal coords'''
         return point[0]-self.view[0], point[1]-self.view[1]
+
+    def convert(self, point):
+        '''Camera.convert((x,y)) -> (x,y)
+        converts normal coords to camera coords'''
+        return point[0]+self.view[0], point[1]+self.view[1]
 
     def move_by(self, x=0, y=0):
         '''Camera.move_by(int, int) -> None
@@ -131,7 +139,7 @@ class Camera(pygame.Surface):
         '''Camera.blit(*args) -> Rect
         draws one image onto another'''
         return pygame.Surface.blit(self, source, self.point(dest), area, special_flags)
-
+    
     ### METHODS TO DRAW SHAPES WITH ###
 
     def line(self, color, start_pos, end_pos, width=1):
@@ -154,7 +162,7 @@ class Camera(pygame.Surface):
         '''Camera.polygon(color, ((x,y), (x,y), ...), int, *args, **kwargs) -> Rect
         draws a polygon from pygame.draw'''
         return pygame.draw.polygon(self, color, [self.point(point) for point in points], width, *args, **kwargs)
-        
+
 class Sprite(pygame.sprite.Sprite):
     '''sprite object to inherit from'''
 
@@ -174,6 +182,7 @@ class Sprite(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.imageTurning = True
         self.onsurface = onsurface
+        self.spriteImageTilt = 0
 
     def get_rect(self):
         '''Sprite.get_rect() -> pygame.Rect
@@ -194,11 +203,13 @@ class Sprite(pygame.sprite.Sprite):
         if surface not given, returns image'''
         if surface == None:
             return self.image
-        
-        self.heading(0)
+
+        tilt = self.spriteImageTilt
+        heading = self.heading()
         self.untiltedImg = surface
-        self.tiltedImg = surface
         self.image = surface
+        self.tilt(tilt)
+        self.heading(heading)
 
     def heading(self, heading=None):
         '''Sprite.get_heading(heading) -> int
@@ -216,6 +227,7 @@ class Sprite(pygame.sprite.Sprite):
     def tilt(self, heading):
         '''Sprite.tilt(heading) -> None
         tilts the image so that heading for image is 0 for sprite'''
+        self.spriteImageTilt = heading
         self.tiltedImg = pygame.transform.rotozoom(self.untiltedImg, heading, 1)
         self.heading(self.heading())
 
@@ -311,8 +323,9 @@ class Sprite(pygame.sprite.Sprite):
         moves the object forward by distance'''
         self.pos((self.position[0]+distance*math.cos(self.head), self.position[1]-distance*math.sin(self.head)))
 
-    def forward_time(self, distance, time):
+    def forward_time(self, distance, time, repeat=False):
         '''Sprite.forward_time(distance, time) -> None
+        Sprite.forward_time(distance, time, repeat) -> None
         moves the object forward distance in time (seconds)
         movement will stop on change of position or heading'''
         if time <= 0:
@@ -324,6 +337,7 @@ class Sprite(pygame.sprite.Sprite):
         self.slideClock.reset()
         self.slideClock.set_max(time)
         self.slideClock.start()
+        self.slideRepeat = repeat
 
     def update(self):
         '''Sprite.update() -> None
@@ -333,6 +347,13 @@ class Sprite(pygame.sprite.Sprite):
             distance = self.slideDistance*self.slideClock.get_time()/self.slideClock.get_max()
             self.position = (self.slideStart[0]+distance*math.cos(math.radians(self.heading())),
                 self.slideStart[1]-distance*math.sin(math.radians(self.heading())))
+
+            # end sliding
+            if self.slideClock.get_time() == self.slideClock.get_max():
+                if self.slideRepeat:
+                    self.forward_time(self.slideDistance, self.slideClock.get_max(), True)
+                else:
+                    self.sliding = False
             
         self.game.blit(self.image, self.position, True, True, self.onsurface)
 
@@ -344,10 +365,11 @@ class Sprite(pygame.sprite.Sprite):
 class Widget(dict):
     '''represents a widget for in-module objects'''
 
-    def __init__(self, game, rect=(0,0,0,0), defaults={}, **attributes):
-        '''Widget(game, rect, defaults, **attributes) -> Widget
+    def __init__(self, game, rect=(0,0,0,0), updateInMainloop = False, defaults={}, **attributes):
+        '''Widget(game, rect, updateInMainloop = False, defaults, **attributes) -> Widget
         constructs the widget
-        rect is pygame.Rect, defaults is dict'''
+        rect is pygame.Rect, defaults is dict
+        '''
         dict.__init__(self, defaults)
         for arg in attributes:
             if arg not in defaults:
@@ -415,7 +437,7 @@ class Widget(dict):
     def move(self, pos, center=True):
         '''Widget.move(pos, center=True) -> None
         moves the widget to pos (centered if center is True)'''
-        if center: pos = pos[0]-self.rect[2]/2, pos[1]-self.rect[3]/2
+        if center: pos = pos[0]-self.rect[2]/2, pos[1]-self.rect[3]/2, self.rect[2], self.rect[3]
         self.rect = pos[0], pos[1], self.rect[2], self.rect[3]
 
     def set_focus_var(self, boolean):
@@ -926,11 +948,13 @@ class _AfterEvent:
 class Sound(pygame.mixer.Sound):
     '''represents a sound object to be played, muted, unmuted'''
 
-    def __init__(self, game, file):
-        '''Sound(game, file) -> Sound
+    def __init__(self, game, file=None, *args, **kwargs):
+        '''Sound(game, file, *args, **kwargs) -> Sound
         constructs the sound'''
-        pygame.mixer.Sound.__init__(self, file)
+        pygame.mixer.Sound.__init__(self, file, *args, **kwargs)
         self.game = game
+        self.game.get_sounds().append(self)
+        self.originVolume = self.get_volume()
         self.unmute()
         if game.is_muted(): self.mute()
 
@@ -955,9 +979,11 @@ class Game:
     intended to be inherited from. includes methods like after
     you must include an update method and your display
     you must call Game.mainloop() to start your game
-    your Game.update() method will be called every iteration of mainloop'''
+    your Game.update() method will be called every iteration of mainloop
 
-    def __init__(self):
+    Don't forget to use pygame.init() in your own code!'''
+
+    def __init__(self, size=(400,400), caption=f"gamesetup {GAME_VERSION}", bg=(0,0,0)):
         '''Game() -> Game
         constructs the game'''
         self.restarting = False
@@ -970,6 +996,13 @@ class Game:
         self.gameFocusedWidget = None
         self.bindings = {}
         self.gameClocks = []
+        self.bgColor = bg
+        self.disableFill = False
+
+        # setup screen
+        pygame.display.set_caption(caption)
+        self.display = pygame.display.set_mode(size)
+        self.screen = Camera(size)
 
     def focus(self, focus=None):
         '''Game.focus(focus=None) -> type
@@ -989,6 +1022,11 @@ class Game:
         '''Game.get_screen() -> type
         returns the game screen'''
         return self.screen
+
+    def get_sounds(self):
+        '''Game.get_sounds() -> list
+        returns the list of game sounds'''
+        return self.soundsList
 
     def is_muted(self):
         '''Game.is_muted() -> bool
@@ -1022,7 +1060,6 @@ class Game:
         sets up and then returns a sound object'''
         newSound = Sound(self, file)
         newSound.set_volume(volume)
-        self.soundsList.append(newSound)
         return newSound
 
     def mute(self):
@@ -1145,7 +1182,11 @@ class Game:
                     
                 self.event(event)
 
+            if not self.disableFill:
+                self.screen.fill(self.bgColor)
             self.update()
+            self.display.blit(self.screen, (0,0))
+            pygame.display.update()
 
         # quit or restart
         pygame.quit()
@@ -1223,9 +1264,9 @@ def in_dir(p1, heading, distance):
 def blit(onsurface, surface, pos, center_x=False, center_y=False):
     '''blit(onsurface, surface, (x,y), bool, bool) -> Rect
     draws surface on onsurface at pos'''
-    if centerx:
+    if center_x:
         pos = pos[0]-surface.get_rect().width/2, pos[1]
-    if centery:
+    if center_y:
         pos = pos[0], pos[1]-surface.get_rect().height/2   
     onsurface.blit(surface, pos)
 
@@ -1260,6 +1301,50 @@ def apply_matrix(matrix, vector):
     '''apply_matrix((int, int), ((int, int), (int, int))) -> (int, int)
     applies matrix to vector'''
     return dot(matrix[0], vector), dot(matrix[1], vector)
+
+def pixel_in_surface(surface, pixel):
+    '''pixel_in_surface(pygame.Surface, (x,y)) -> bool
+    returns if the pixel is index range of a surface'''
+    w,h = surface.get_size()
+    return 0 <= pixel[0] < w and 0 <= pixel[1] < h
+
+def version():
+    '''version() -> str
+    returns the gamesetup version'''
+    return GAME_VERSION
+
+def print_starter():
+    '''print_start() -> None
+    returns a starter format for a game'''
+    print('''
+import gamesetup as gs
+import pygame, time, random
+
+class Fly(gs.Sprite):
+
+    def __init__(self, game):
+        gs.Sprite.__init__(self, game, pygame.Surface((30,30)))
+        self.surface().fill((118,35,18))
+        self.pos((250,250))
+
+    def update(self):
+        self.forward(1)
+        self.heading(self.heading() + random.choice((-1,-1,0,1)))
+        gs.Sprite.update(self)
+        
+
+class Game(gs.Game):
+
+    def __init__(self):
+        gs.Game.__init__(self, (500,500), "Sandbox")
+        self.fly = Fly(self)
+
+    def update(self):
+        self.fly.update()
+
+pygame.init()
+game = Game()
+game.mainloop()''')
 
 if __name__ == "__main__":
     print(rotate_points(-towards((0,0), (0,1)), (0,0), (0,0), (0,1)))
