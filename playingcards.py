@@ -1,7 +1,7 @@
 # Name: Playing Cards
 # Author: Oliver White
 # Date: 8/20/24
-# Version 1.0.0
+# Version 1.0.1
 #
 # Used with the pygame module
 # Also requires gamesetup 1.9.5
@@ -10,7 +10,7 @@ import pygame, time, random, math
 import gamesetup as gs
 
 global GAME_VERSION
-GAME_VERSION = "1.0.0"
+GAME_VERSION = "1.0.1"
 
 def _draw_diamond_for_back_design(surface, color, x, y, width, height):
     '''_draw_diamond_for_back_design(
@@ -328,7 +328,7 @@ class Card(gs.Widget):
             self.move(pos)
             self.position = pos
 
-        return rect[0], rect[1]
+        return rect[0] + rect[2] / 2, rect[1] + rect[3] / 2
 
     def get_current_side(self):
         '''Card.get_current_side() -> str
@@ -622,12 +622,14 @@ class CardDeck:
         self.deck = []
         self.discard = []
         self.deckLocation = location
+        self.discardLocation = 0,0
         self.hasMovedDiscard = False
         self.movementSpeed = 1500
-        self.eventCommand = self.process_click_of_top_card
+        self.eventCommand = self.move_top_card_to_discard
         self.load_deck(
             size, backColor, outlineColor,
-            outlineWidth, preloadDeck, includeJokers)
+            outlineWidth, preloadDeck, includeJokers,
+            visualStackHeight, showEmptyPiles, preshuffle)
 
     def get_movement_speed(self):
         '''CardDeck.get_movement_speed() -> int
@@ -638,6 +640,11 @@ class CardDeck:
         '''CardDeck.set_movement_speed(int) -> None
         sets the speed of the cards when going to the discard (pixels / second)'''
         self.movementSpeed = newSpeed
+
+    def get_card_size(self):
+        '''CardDeck.get_card_size() -> (int, int)
+        returns and width and height of the cards inluding outline'''
+        return get_sizes(self.outlineWidth)[self.size]
         
     def get_deck_location(self):
         '''CardDeck.get_deck_location() -> (x,y)
@@ -655,6 +662,7 @@ class CardDeck:
         self.deckLocation = newLocation
         for card in self.deck:
             card.pos(self.deckLocation)
+        self.deckEmpty.pos(self.deckLocation)
 
     def set_discard_location(self, newLocation, relative = True, sys = False):
         '''CardDeck.set_discard_location((x,y), relative = True) -> None
@@ -667,6 +675,7 @@ class CardDeck:
             self.discardLocation = newLocation
         for card in self.discard:
             card.pos(self.discardLocation)
+        self.discardEmpty.pos(self.discardLocation)
 
     def get_deck(self):
         '''CardDeck.get_deck() -> list
@@ -706,39 +715,15 @@ class CardDeck:
         self.showEmptyPiles = showEmptyPiles
             
         if preloadDeck == None:
-            faces = get_faces()
-            suits = get_suits()
-            colors = ["red", "black"]
+            preloadDeck = get_deck(includeJokers, preshuffle)
 
-            # load each card
-            for face in faces:
-                for suit in suits:
-                    self.deck.append(
-                        Card(self.game,(face, suit, colors[suits.index(suit) % 2]), size, backColor, outlineColor, outlineWidth)
-                    )
-                    
-            # now add jokers
-            if includeJokers:
-                for color in colors:
-                    self.deck.append(
-                        Card(self.game,("JOKER", "JOKER", color), size, backColor, outlineColor, outlineWidth)
-                    )
-        else:
-            for card in preloadDeck:
-                self.deck.append(
-                    Card(self.game, card, size, backColor, outlineColor, outlineWidth)
-                )
-
-        # set the location of all new cards
-        self.size = size
-        self.outlineWidth = outlineWidth
-        self.set_deck_location(self.deckLocation)
-        if not self.hasMovedDiscard:
-            self.set_discard_location((get_sizes(outlineWidth)[self.size][0] * 1.15,0), True, True)
-        self.redo_deck_stack_visual()
+        for card in preloadDeck:
+            self.deck.append(
+                Card(self.game, card, size, backColor, outlineColor, outlineWidth)
+            )
 
         # the size for the two empty cards (omne for the deck and one for discard
-        w, h = get_sizes()[self.size]
+        w, h = get_sizes()[size]
         w *= 0.9
         h *= 0.9
         x1, y1 = self.discardLocation
@@ -752,8 +737,16 @@ class CardDeck:
         self.deckEmpty.pos(self.deckLocation)
         self.deckEmpty.flip_card()
 
-        if preshuffle:
-            self.shuffle_deck()
+        # set the location of all new cards
+        self.size = size
+        self.outlineWidth = outlineWidth
+        self.set_deck_location(self.deckLocation)
+        if not self.hasMovedDiscard:
+            self.set_discard_location((get_sizes(outlineWidth)[self.size][0] * 1.15,0), True, True)
+
+        # fix all vent bindings and card offsets
+        self.redo_deck_stack_visual()
+        self.rebind_deck_click()
 
     def onclick(self, command = None):
         '''CardDeck.onclick(command = None) -> None
@@ -807,14 +800,14 @@ class CardDeck:
     def unbind_deck_click(self):
         '''CardDeck.unbind_deck_click() -> None
         unbinds the one event attached to the card deck
-        function that was called is CardDeck.process_click_of_top_card'''
+        function that was called is CardDeck.move_top_card_to_discard'''
         if len(self.deck) > 0:
             self.get_top_of_deck().remove_event("on-deck-click")
 
     def rebind_deck_click(self):
         '''CardDeck.rebind_deck_click(self):
         rebinds the one event attached to the card deck
-        function called is CardDeck.process_click_of_top_card'''
+        function called is CardDeck.process_move_top_card_to_discard'''
         if len(self.deck) > 0 and self.eventCommand != None:
             self.get_top_of_deck().onclick("on-deck-click", self.eventCommand)
 
@@ -840,8 +833,8 @@ class CardDeck:
         self.discard.append(card)
         self.redo_discard_stack_visual()
 
-    def process_click_of_top_card(self, event):
-        '''CardDeck.process_click_of_top_card(event) -> None
+    def move_top_card_to_discard(self, event = None):
+        '''CardDeck.move_top_card_to_discard(event = None) -> None
         This is called whenever the top card in the deck is clicked'''
         card = self.get_top_of_deck()
         if card != None:
@@ -1031,7 +1024,33 @@ def get_colors():
         "pink": (226, 63, 98),
         "silver": (145, 148, 156),
         "gold": (222, 179, 97),
-    }        
+    }
+
+def get_deck(includeJokers = True, preshuffle = True):
+    '''get_deck(includeJokers = True, preshuffle = True) -> list
+    returns a list of cards tuples to build a deck
+    set includeJoker to True/False to control whether jokers are present or not
+    set preshuffle to True/False to shuffle the deck after creating it or not
+    a card tuple looks like this (face, suit, color) or ("10", "heart", "red")'''
+    deck = []
+    faces = get_faces()
+    suits = get_suits()
+    colors = ["red", "black"]
+
+    # load each card
+    for face in faces:
+        for suit in suits:
+            deck.append((face, suit, colors[suits.index(suit) % 2]))
+            
+    # now add jokers
+    if includeJokers:
+        for color in colors:
+            deck.append(("JOKER", "JOKER", color))
+
+    if preshuffle: random.shuffle(deck)
+
+    return deck
+    
             
 # test the cards
 if __name__ == "__main__":
