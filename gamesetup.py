@@ -1,7 +1,7 @@
 # Name: Game Setup
 # Author: Oliver White
 # Date: 1/25/2021
-# Version 1.8.6
+# Version 1.9.0
 #
 # Used with the pygame module
 #
@@ -15,7 +15,7 @@
 import pygame, time, math, random
 
 global GAME_VERSION
-GAME_VERSION = "1.8.6"
+GAME_VERSION = "1.9.0"
 
 class GameSetupError(Exception):
     '''error for the gamesetup module'''
@@ -58,6 +58,11 @@ class Clock:
         if self.maxTime != None and currentTime > self.maxTime:
             return self.maxTime
         return currentTime
+    
+    def at_max(self):
+        '''Clock.at_max() -> bool
+        returns if the clock is at the max'''
+        return self.maxTime == self.get_time()
 
     def set_time(self, newTime):
         '''Clock.set_time(newTime) -> None
@@ -196,6 +201,11 @@ class Sprite(pygame.sprite.Sprite):
             self.imageTurning = boolean
         else:
             self.imageTurning = not self.imageTurning
+
+    def is_sliding(self):
+        '''Sprite.is_sliding() -> bool
+        returns if the sprite is in the process of moving'''
+        return self.sliding
 
     def surface(self, surface=None):
         '''Sprite.surface(surface) -> Surface
@@ -989,7 +999,7 @@ class Game:
 
     Don't forget to use pygame.init() in your own code!'''
 
-    def __init__(self, size=(400,400), caption=f"gamesetup {GAME_VERSION}", bg=(0,0,0)):
+    def __init__(self, size=(400,400), caption=f"gamesetup {GAME_VERSION}", bg=(0,0,0), fps=60):
         '''Game() -> Game
         constructs the game'''
         self.restarting = False
@@ -1004,11 +1014,24 @@ class Game:
         self.gameClocks = []
         self.bgColor = bg
         self.disableFill = False
+        self.fps = fps
 
         # setup screen
         pygame.display.set_caption(caption)
         self.display = pygame.display.set_mode(size)
         self.screen = Camera(size)
+
+        # fps clock
+        
+        self.fpsClock = Clock(1 / (fps + 2 * fps // 60))
+        self.fpsClock.set_time(self.fpsClock.get_max())
+        self.showFps = False
+        self.fpsDisplayFont = pygame.font.SysFont("Arial", 15)
+        self.currentFrames = 0
+
+        # set up default font
+        # used primarily for testing
+        self.defaultFont = pygame.font.SysFont("Arial", 20, True)
 
     def focus(self, focus=None):
         '''Game.focus(focus=None) -> type
@@ -1050,11 +1073,27 @@ class Game:
         returns None if not found'''
         if widgetID in self.widgets:
             return self.widgets[widgetID]
+        
+    def get_fps(self):
+        '''Game.get_fps() -> int
+        returns the game's current fps'''
+        return self.fps
+    
+    def toggle_fps_display(self):
+        '''Game.toggle_fps_display() -> None
+        toggles the fps dispay (top right corner) on or off'''
+        self.showFps = not self.showFps
 
     def add_widget(self, widget, widgetID):
         '''Game.add_widget() -> None
         adds widget to game'''
         self.widgets[widgetID] = widget
+
+    def set_default_font(self, name, size, bold=False, italic=False):
+        '''Game.set_default_font(str, int, bool, bool) -> None
+        sets a new default font using font name, size, bol and italic
+        bold and italic both default to False'''
+        self.defaultFont = pygame.font.SysFont(name, size, bold, italic)
 
     def after(self, ms, command):
         '''Game.after(ms, command) -> time
@@ -1096,6 +1135,12 @@ class Game:
         '''Game.play_all_clocks() -> None
         plays all registered clocks'''
         for clock in self.gameClocks: clock.start()
+
+    def pixels_per_sec(self, pixelsPerSec):
+        '''Game.pixels_per_sec(int) -> float
+        returns the amount of pixels to move to achieve a speed of 
+        the given pixels per second'''
+        return pixelsPerSec / self.fps
         
     def restart(self):
         '''Game.restart() -> None
@@ -1146,9 +1191,9 @@ class Game:
         '''Game.unbind(eventType) -> None
         unbinds event from ID
         if ID not given, unbinds all'''
-        if eventType == None:
+        if ID == None:
             self.bindings.clear()
-        if eventType in self.bindings:
+        if ID in self.bindings:
             self.bindings.pop(ID)
 
     def get_clear_id(self):
@@ -1160,11 +1205,44 @@ class Game:
             if ID not in self.bindings:
                 return ID
             i += 1
+
+    def write(self, text, position, color="white", centerx = False, centery = False, font=None):
+        '''Game.write(str, (int,int), str, bool=False, bool=False, pygame.font.Font=None) -> None
+        writes text using the default font
+        primarily used for testing values since printing them isn't always viable
+        color defaults to white
+        centerx and centery both default to False
+        if font is set, uses that font in place of default font'''
+        if not isinstance(text, str):
+            text = str(text)
+
+        if font:
+            textSurface = font.render(text, True, color)
+        else:
+            textSurface = self.defaultFont.render(text, True, color)
+        self.blit(textSurface, position, centerx, centery)
             
     def mainloop(self):
         '''Game.mainloop() -> None
         starts the mainloop for the game'''
+        # start game clocks to regulate fps
+        gameClock = Clock(5)
+        gameClock.start()
+        self.fpsClock.start()
+        currentFps = self.fps
+
+        # the full mainloop
         while self.isGameRunning:
+            # skip if fps clock is still running
+            if not self.fpsClock.at_max():
+                continue
+            self.fpsClock.reset()
+            self.fpsClock.start()
+
+            # calculate fps
+            if gameClock.get_time() > 1:
+                currentFps = self.currentFrames / gameClock.get_time()
+
             # check all after events
             for event in self._AfterEvents[:]:
                 event.check()
@@ -1196,9 +1274,19 @@ class Game:
                 if self.widgets[widget].get_update_status():
                     self.widgets[widget].update()
 
+            if self.showFps:
+                self.write(f"{round(currentFps)} fps", (2,2), "light grey", font=self.fpsDisplayFont)
             self.update()
             self.display.blit(self.screen, (0,0))
             pygame.display.update()
+            self.currentFrames += 1
+
+            # reset frames and game clock after the max time runs out
+            # this allows the fps to be measured more accurately
+            if gameClock.at_max():
+                gameClock.reset()
+                gameClock.start()
+                self.currentFrames = 0
 
         # quit or restart
         pygame.quit()
