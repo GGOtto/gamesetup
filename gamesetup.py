@@ -1,7 +1,7 @@
 # Name: Game Setup
 # Author: Oliver White
 # Date: 1/25/2021
-# Version 1.8.5
+# Version 1.8.6
 #
 # Used with the pygame module
 #
@@ -15,7 +15,7 @@
 import pygame, time, math, random
 
 global GAME_VERSION
-GAME_VERSION = "1.8.5"
+GAME_VERSION = "1.8.6"
 
 class GameSetupError(Exception):
     '''error for the gamesetup module'''
@@ -381,6 +381,7 @@ class Widget(dict):
         game.add_widget(self, self.id)
         self.game = game
         self.events = {}
+        self.updateInMainloop = updateInMainloop
 
     def __eq__(self, other):
         '''Widget == other -> bool
@@ -391,6 +392,11 @@ class Widget(dict):
         '''str(Widget) -> str
         converts widget to str'''
         return f"<Widget -ID: {self.id} -Rect: {self.rect} -Events: {self.events}>"
+    
+    def get_update_status(self):
+        '''Widget.get_update_status() -> bool
+        returns if the widget should be updated in the game mainloop'''
+        return self.updateInMainloop
 
     def get_clear_ID(self):
         '''Widget.ID() -> str
@@ -1184,6 +1190,12 @@ class Game:
 
             if not self.disableFill:
                 self.screen.fill(self.bgColor)
+
+            # update widgets that have updateInMainloop set to True
+            for widget in self.widgets:
+                if self.widgets[widget].get_update_status():
+                    self.widgets[widget].update()
+
             self.update()
             self.display.blit(self.screen, (0,0))
             pygame.display.update()
